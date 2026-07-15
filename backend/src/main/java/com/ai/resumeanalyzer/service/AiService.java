@@ -1,9 +1,9 @@
 package com.ai.resumeanalyzer.service;
 
 import com.ai.resumeanalyzer.payload.ResumeAnalysisResponse;
-import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.AllArgsConstructor;
 import lombok.Data;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,7 +20,7 @@ import java.util.*;
 public class AiService {
     private static final Logger logger = LoggerFactory.getLogger(AiService.class);
 
-    @Value("${gemini.api.key:}")
+    @Value("${groq.api.key:}")
     private String apiKey;
 
     private final RestTemplate restTemplate = new RestTemplate();
@@ -31,78 +31,80 @@ public class AiService {
     }
 
     /**
-     * Structure for Gemini API Request
+     * Structure for Groq Chat Completion Request
      */
     @Data
-    private static class GeminiRequest {
-        private List<Content> contents;
-        private GenerationConfig generationConfig;
+    private static class GroqRequest {
+        private String model;
+        private List<Message> messages;
+        private ResponseFormat response_format;
 
         @Data
-        public static class Content {
-            private List<Part> parts;
+        @AllArgsConstructor
+        public static class Message {
+            private String role;
+            private String content;
         }
 
         @Data
-        public static class Part {
-            private String text;
-        }
-
-        @Data
-        public static class GenerationConfig {
-            private String responseMimeType;
+        @AllArgsConstructor
+        public static class ResponseFormat {
+            private String type; // "json_object"
         }
     }
 
-    private String callGemini(String prompt) {
+    private String callGroq(String prompt) {
         if (!isApiKeyAvailable()) {
-            logger.warn("Gemini API key is not configured. Falling back to Mock responses.");
+            logger.warn("Groq API key is not configured. Falling back to Mock responses.");
             return null;
         }
 
         try {
-            String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + apiKey;
+            String url = "https://api.groq.com/openai/v1/chat/completions";
 
             // Setup Request Body
-            GeminiRequest requestBody = new GeminiRequest();
-            
-            GeminiRequest.Part part = new GeminiRequest.Part();
-            part.setText(prompt);
-
-            GeminiRequest.Content content = new GeminiRequest.Content();
-            content.setParts(List.of(part));
-
-            GeminiRequest.GenerationConfig config = new GeminiRequest.GenerationConfig();
-            config.setResponseMimeType("application/json");
-
-            requestBody.setContents(List.of(content));
-            requestBody.setGenerationConfig(config);
+            GroqRequest requestBody = new GroqRequest();
+            requestBody.setModel("llama-3.1-8b-instant");
+            requestBody.setMessages(List.of(new GroqRequest.Message("user", prompt)));
+            requestBody.setResponse_format(new GroqRequest.ResponseFormat("json_object"));
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.set("Authorization", "Bearer " + apiKey.trim());
 
-            HttpEntity<GeminiRequest> entity = new HttpEntity<>(requestBody, headers);
+            HttpEntity<GroqRequest> entity = new HttpEntity<>(requestBody, headers);
             ResponseEntity<String> response = restTemplate.postForEntity(url, entity, String.class);
 
             if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
-                // Parse the response JSON from Gemini nested structure: response.candidates[0].content.parts[0].text
+                // Parse the response JSON from Groq standard OpenAI format: choices[0].message.content
                 Map<String, Object> responseMap = objectMapper.readValue(response.getBody(), new TypeReference<Map<String, Object>>() {});
-                List<Map<String, Object>> candidates = (List<Map<String, Object>>) responseMap.get("candidates");
-                if (candidates != null && !candidates.isEmpty()) {
-                    Map<String, Object> candidate = candidates.get(0);
-                    Map<String, Object> contentObj = (Map<String, Object>) candidate.get("content");
-                    if (contentObj != null) {
-                        List<Map<String, Object>> parts = (List<Map<String, Object>>) contentObj.get("parts");
-                        if (parts != null && !parts.isEmpty()) {
-                            return (String) parts.get(0).get("text");
-                        }
+                List<Map<String, Object>> choices = (List<Map<String, Object>>) responseMap.get("choices");
+                if (choices != null && !choices.isEmpty()) {
+                    Map<String, Object> choice = choices.get(0);
+                    Map<String, Object> message = (Map<String, Object>) choice.get("message");
+                    if (message != null) {
+                        return (String) message.get("content");
                     }
                 }
             }
         } catch (Exception e) {
-            logger.error("Error communicating with Gemini API: {}", e.getMessage());
+            logger.error("Error communicating with Groq API: {}", e.getMessage());
         }
         return null;
+    }
+
+    private String cleanJsonString(String rawJson) {
+        if (rawJson == null) return "";
+        String clean = rawJson.trim();
+        if (clean.startsWith("```json")) {
+            clean = clean.substring(7);
+        } else if (clean.startsWith("```")) {
+            clean = clean.substring(3);
+        }
+        if (clean.endsWith("```")) {
+            clean = clean.substring(0, clean.length() - 3);
+        }
+        return clean.trim();
     }
 
     public ResumeAnalysisResponse analyzeResume(String resumeText) {
@@ -113,12 +115,13 @@ public class AiService {
                 "- suggestions (list of strings representing clear, actionable suggestions to improve the resume)\n\n" +
                 "Resume Text:\n" + resumeText;
 
-        String rawJson = callGemini(prompt);
+        String rawJson = callGroq(prompt);
         if (rawJson != null) {
             try {
+                rawJson = cleanJsonString(rawJson);
                 return objectMapper.readValue(rawJson, ResumeAnalysisResponse.class);
             } catch (Exception e) {
-                logger.error("Failed to parse Gemini response for resume analysis: {}", e.getMessage());
+                logger.error("Failed to parse Groq response for resume analysis: {}", e.getMessage());
             }
         }
 
@@ -152,12 +155,26 @@ public class AiService {
                 "Output must be a valid JSON array of objects with fields: [questionType, questionText, options, correctAnswer].\n\n" +
                 "Resume Text:\n" + resumeText;
 
-        String rawJson = callGemini(prompt);
+        String rawJson = callGroq(prompt);
         if (rawJson != null) {
             try {
-                return objectMapper.readValue(rawJson, new TypeReference<List<GeneratedQuestion>>() {});
+                rawJson = cleanJsonString(rawJson);
+                
+                // Try deserializing directly as array
+                if (rawJson.startsWith("[")) {
+                    return objectMapper.readValue(rawJson, new TypeReference<List<GeneratedQuestion>>() {});
+                } else if (rawJson.startsWith("{")) {
+                    // Try to find an array inside the object
+                    Map<String, Object> map = objectMapper.readValue(rawJson, new TypeReference<Map<String, Object>>() {});
+                    for (Object value : map.values()) {
+                        if (value instanceof List) {
+                            String innerListJson = objectMapper.writeValueAsString(value);
+                            return objectMapper.readValue(innerListJson, new TypeReference<List<GeneratedQuestion>>() {});
+                        }
+                    }
+                }
             } catch (Exception e) {
-                logger.error("Failed to parse Gemini response for question generation: {}", e.getMessage());
+                logger.error("Failed to parse Groq response for question generation: {}", e.getMessage());
             }
         }
 
@@ -215,12 +232,13 @@ public class AiService {
                 "- score (integer from 0 to 100 based on accuracy and details)\n" +
                 "- aiFeedback (string giving constructive feedback, highlighting what was correct, what was missing, and the ideal answer details)\n";
 
-        String rawJson = callGemini(prompt);
+        String rawJson = callGroq(prompt);
         if (rawJson != null) {
             try {
+                rawJson = cleanJsonString(rawJson);
                 return objectMapper.readValue(rawJson, EvaluationResponse.class);
             } catch (Exception e) {
-                logger.error("Failed to parse Gemini response for answer evaluation: {}", e.getMessage());
+                logger.error("Failed to parse Groq response for answer evaluation: {}", e.getMessage());
             }
         }
 
