@@ -38,6 +38,7 @@ public class AiService {
         private String model;
         private List<Message> messages;
         private ResponseFormat response_format;
+        private Double temperature;
 
         @Data
         @AllArgsConstructor
@@ -67,6 +68,7 @@ public class AiService {
             requestBody.setModel("llama-3.1-8b-instant");
             requestBody.setMessages(List.of(new GroqRequest.Message("user", prompt)));
             requestBody.setResponse_format(new GroqRequest.ResponseFormat("json_object"));
+            requestBody.setTemperature(0.0);
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
