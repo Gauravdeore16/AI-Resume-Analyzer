@@ -19,6 +19,10 @@ export const authService = {
     return await api.post('/auth/register', { username, email, password, role });
   },
 
+  forgotPassword: async (email, newPassword) => {
+    return await api.post('/auth/forgot-password', { email, newPassword });
+  },
+
   logout: () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');

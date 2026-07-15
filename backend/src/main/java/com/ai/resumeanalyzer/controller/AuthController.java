@@ -88,4 +88,15 @@ public class AuthController {
 
         return ResponseEntity.ok(new MessageResponse("User registered successfully!"));
     }
+
+    @PostMapping("/forgot-password")
+    public ResponseEntity<?> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
+        return userRepository.findByEmail(request.getEmail())
+                .map(user -> {
+                    user.setPassword(encoder.encode(request.getNewPassword()));
+                    userRepository.save(user);
+                    return ResponseEntity.ok(new MessageResponse("Password updated successfully!"));
+                })
+                .orElseGet(() -> ResponseEntity.badRequest().body(new MessageResponse("Error: Email not found!")));
+    }
 }
